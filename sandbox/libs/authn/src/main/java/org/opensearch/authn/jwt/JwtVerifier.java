@@ -68,9 +68,7 @@ public class JwtVerifier {
         SignatureAlgorithm tokenAlgorithm = SignatureAlgorithm.getAlgorithm(jwt.getJwsHeaders().getAlgorithm());
 
         if (!keyAlgorithm.equals(tokenAlgorithm)) {
-            throw new RuntimeException(
-                "Algorithm of JWT does not match algorithm of JWK (" + keyAlgorithm + " != " + tokenAlgorithm + ")"
-            );
+            throw new RuntimeException("Algorithm of JWT does not match algorithm of JWK (" + keyAlgorithm + " != " + tokenAlgorithm + ")");
         }
     }
 

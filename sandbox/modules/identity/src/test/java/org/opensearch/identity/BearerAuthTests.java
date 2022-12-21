@@ -143,7 +143,7 @@ public class BearerAuthTests extends OpenSearchTestCase {
         request.setOptions(options);
         Response response = OpenSearchRestTestCase.client().performRequest(request);
         // Should be unauthorized because created with a different signing algorithm
-        //  Current implementation allows a unauthorized request to pass
+        // Current implementation allows a unauthorized request to pass
         try {
             OpenSearchRestTestCase.client().performRequest(request);
         } catch (ResponseException e) {

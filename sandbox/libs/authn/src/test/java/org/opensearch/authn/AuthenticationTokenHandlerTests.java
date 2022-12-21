@@ -62,4 +62,3 @@ public class AuthenticationTokenHandlerTests extends OpenSearchTestCase {
         MatcherAssert.assertThat(shiroAuthToken, nullValue());
     }
 }
-
