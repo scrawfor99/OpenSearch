@@ -8,6 +8,9 @@
 
 package org.opensearch.authn.tokens;
 
+/**
+ * Bearer Authentication Tokens consisting of a JWT signed with a private key
+ */
 public class BearerAuthToken extends HttpHeaderToken {
 
     private String headerValue;
