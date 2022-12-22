@@ -12,8 +12,6 @@ import org.apache.shiro.authc.UsernamePasswordToken;
 import org.opensearch.authn.tokens.BasicAuthToken;
 import org.opensearch.authn.tokens.BearerAuthToken;
 import org.apache.shiro.authc.BearerToken;
-import org.apache.cxf.rs.security.jose.jwt.JwtToken;
-import org.opensearch.authn.jwt.JwtVerifier;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -85,13 +83,6 @@ public class AuthenticationTokenHandler {
     private static AuthenticationToken handleBearerAuth(final BearerAuthToken token) throws RuntimeException {
 
         String encodedJWT = token.getHeaderValue().substring("Bearer".length()).trim();
-
-        // This just verifies the token and returns a decoded one in the process--the decoded version is not used here though
-        try {
-            JwtToken jwtToken = JwtVerifier.getVerifiedJwtToken(encodedJWT);
-        } catch (RuntimeException e) {
-            throw (e); // Could not verify the JWT token--throw this error to prevent the return
-        }
         return new BearerToken(encodedJWT);
     }
 }
