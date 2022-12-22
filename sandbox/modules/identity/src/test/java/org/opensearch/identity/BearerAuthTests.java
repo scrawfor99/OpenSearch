@@ -130,7 +130,7 @@ public class BearerAuthTests extends AbstractIdentityTestCase {
         try {
             getRestClient().performRequest(request);
         } catch (ResponseException e) {
-            MatcherAssert.assertThat(e.getResponse().getStatusLine().getStatusCode(), equalTo(500));
+            MatcherAssert.assertThat(e.getResponse().getStatusLine().getStatusCode(), equalTo(401));
         }
     }
 
@@ -147,7 +147,7 @@ public class BearerAuthTests extends AbstractIdentityTestCase {
         try {
             getRestClient().performRequest(request);
         } catch (ResponseException e) {
-            MatcherAssert.assertThat(e.getResponse().getStatusLine().getStatusCode(), equalTo(500));
+            MatcherAssert.assertThat(e.getResponse().getStatusLine().getStatusCode(), equalTo(401));
         }
     }
 
@@ -161,7 +161,7 @@ public class BearerAuthTests extends AbstractIdentityTestCase {
         try {
             getRestClient().performRequest(request);
         } catch (ResponseException e) {
-            MatcherAssert.assertThat(e.getResponse().getStatusLine().getStatusCode(), equalTo(500));
+            MatcherAssert.assertThat(e.getResponse().getStatusLine().getStatusCode(), equalTo(401));
         }
     }
 }
