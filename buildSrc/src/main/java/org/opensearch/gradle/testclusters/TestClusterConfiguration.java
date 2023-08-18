@@ -107,6 +107,8 @@ public interface TestClusterConfiguration {
 
     void setPreserveDataDir(boolean preserveDataDir);
 
+    void setSecure(boolean secure);
+
     void freeze();
 
     void start();
