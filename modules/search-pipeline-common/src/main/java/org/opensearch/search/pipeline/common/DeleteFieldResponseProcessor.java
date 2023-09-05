@@ -30,116 +30,110 @@ import java.util.Map;
  */
 public class DeleteFieldResponseProcessor extends AbstractProcessor implements SearchResponseProcessor {
 
-	private final String field;
-	private final boolean ignoreMissing;
+    private final String field;
+    private final boolean ignoreMissing;
 
-	/**
-	 * Key to reference this processor type from a search pipeline.
-	 */
-	public static final String TYPE = "delete_field";
+    /**
+     * Key to reference this processor type from a search pipeline.
+     */
+    public static final String TYPE = "delete_field";
 
-	/**
-	 * Constructor that takes a target field to rename and the new name
-	 *
-	 * @param tag            processor tag
-	 * @param description    processor description
-	 * @param ignoreFailure  option to ignore failure
-	 * @param field        name of field to delete
-	 * @param ignoreMissing if true, do not throw error if oldField does not exist within search response
-	 */
-	public DeleteFieldResponseProcessor(
-			String tag,
-			String description,
-			boolean ignoreFailure,
-			String field,
-			boolean ignoreMissing
-	) {
-		super(tag, description, ignoreFailure);
-		this.field = field;
-		this.ignoreMissing = ignoreMissing;
-	}
+    /**
+     * Constructor that takes a target field to be deleted
+     *
+     * @param tag            processor tag
+     * @param description    processor description
+     * @param ignoreFailure  option to ignore failure
+     * @param field        name of field to delete
+     * @param ignoreMissing if true, do not throw error if oldField does not exist within search response
+     */
+    public DeleteFieldResponseProcessor(String tag, String description, boolean ignoreFailure, String field, boolean ignoreMissing) {
+        super(tag, description, ignoreFailure);
+        this.field = field;
+        this.ignoreMissing = ignoreMissing;
+    }
 
-	@Override
-	public String getType() {
-		return TYPE;
-	}
+    @Override
+    public String getType() {
+        return TYPE;
+    }
 
-	/**
-	 * Get the provided field to be deleted
-	 * @return oldField
-	 */
-	public String getField() {
-		return field;
-	}
+    /**
+     * Get the provided field to be deleted
+     * @return oldField
+     */
+    public String getField() {
+        return field;
+    }
 
-	/**
-	 * Getter function for ignoreMissing
-	 * @return ignoreMissing
-	 */
-	public boolean isIgnoreMissing() {
-		return ignoreMissing;
-	}
+    /**
+     * Getter function for ignoreMissing
+     * @return ignoreMissing
+     */
+    public boolean isIgnoreMissing() {
+        return ignoreMissing;
+    }
 
-	@Override
-	public SearchResponse processResponse(SearchRequest request, SearchResponse response) throws Exception {
-		boolean foundField = false;
+    @Override
+    public SearchResponse processResponse(SearchRequest request, SearchResponse response) throws Exception {
+        boolean foundField = false;
 
-		SearchHit[] hits = response.getHits().getHits();
-		for (SearchHit hit : hits) {
-			Map<String, DocumentField> fields = hit.getFields();
-			if (fields.containsKey(field)) {
-				foundField = true;
-				DocumentField old = hit.removeDocumentField(field);
-			}
+        SearchHit[] hits = response.getHits().getHits();
+        for (SearchHit hit : hits) {
+            Map<String, DocumentField> fields = hit.getFields();
+            if (fields.containsKey(field)) {
+                foundField = true;
+                DocumentField old = hit.removeDocumentField(field);
+            }
 
-			if (hit.hasSource()) {
-				BytesReference sourceRef = hit.getSourceRef();
-				Tuple<? extends MediaType, Map<String, Object>> typeAndSourceMap = XContentHelper.convertToMap(
-						sourceRef,
-						false,
-						(MediaType) null
-				);
+            if (hit.hasSource()) {
+                BytesReference sourceRef = hit.getSourceRef();
+                Tuple<? extends MediaType, Map<String, Object>> typeAndSourceMap = XContentHelper.convertToMap(
+                    sourceRef,
+                    false,
+                    (MediaType) null
+                );
 
-				Map<String, Object> sourceAsMap = typeAndSourceMap.v2();
-				if (sourceAsMap.containsKey(field)) {
-					foundField = true;
-					Object val = sourceAsMap.remove(field);
-					XContentBuilder builder = XContentBuilder.builder(typeAndSourceMap.v1().xContent());
-					builder.map(sourceAsMap);
-					hit.sourceRef(BytesReference.bytes(builder));
-				}
-			}
+                Map<String, Object> sourceAsMap = typeAndSourceMap.v2();
+                if (sourceAsMap.containsKey(field)) {
+                    foundField = true;
+                    Object val = sourceAsMap.remove(field);
+                    XContentBuilder builder = XContentBuilder.builder(typeAndSourceMap.v1().xContent());
+                    builder.map(sourceAsMap);
+                    hit.sourceRef(BytesReference.bytes(builder));
+                }
+            }
 
-			if (!foundField && !ignoreMissing) {
-				throw new IllegalArgumentException("Document with id " + hit.getId() + " is missing field " + field);
-			}
-		}
+            if (!foundField && !ignoreMissing) {
+                throw new IllegalArgumentException("Document with id " + hit.getId() + " is missing field " + field);
+            }
+        }
 
-		return response;
-	}
+        return response;
+    }
 
-	/**
-	 * This is a factor that creates the RenameResponseProcessor
-	 */
-	public static final class Factory implements Processor.Factory<SearchResponseProcessor> {
+    /**
+     * This is a factory that creates the DeleteFieldResponseProcessor
+     */
+    public static final class Factory implements Processor.Factory<SearchResponseProcessor> {
 
-		/**
-		 * Constructor for factory
-		 */
-		Factory() {}
+        /**
+         * Constructor for factory
+         */
+        Factory() {}
 
-		@Override
-		public DeleteFieldResponseProcessor create(
-				Map<String, Processor.Factory<SearchResponseProcessor>> processorFactories,
-				String tag,
-				String description,
-				boolean ignoreFailure,
-				Map<String, Object> config,
-				PipelineContext pipelineContext
-		) throws Exception {
-			String field = ConfigurationUtils.readStringProperty(TYPE, tag, config, "field");
-			boolean ignoreMissing = ConfigurationUtils.readBooleanProperty(TYPE, tag, config, "ignore_missing", false);
-			return new DeleteFieldResponseProcessor(tag, description, ignoreFailure, field, ignoreMissing);
-		}
-	}
+        @Override
+        public DeleteFieldResponseProcessor create(
+            Map<String, Processor.Factory<SearchResponseProcessor>> processorFactories,
+            String tag,
+            String description,
+            boolean ignoreFailure,
+            Map<String, Object> config,
+            PipelineContext pipelineContext
+        ) throws Exception {
+            String field = ConfigurationUtils.readStringProperty(TYPE, tag, config, "field");
+            boolean ignoreMissing = ConfigurationUtils.readBooleanProperty(TYPE, tag, config, "ignore_missing", false);
+            return new DeleteFieldResponseProcessor(tag, description, ignoreFailure, field, ignoreMissing);
+        }
+    }
 }

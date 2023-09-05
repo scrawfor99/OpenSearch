@@ -280,6 +280,8 @@ Features that are shipped with OpenSearch by default but are not built in to the
 
 For example, reindex requires the `connect` permission so it can perform reindex-from-remote but we don't believe that the *all* of OpenSearch should have the "connect". For another example, Painless is implemented using antlr4 and asm and we don't believe that *all* of OpenSearch should have access to them.
 
+For guidance on creating search-pipeline processors visit [search-processor-creation](). 
+
 ### `plugins`
 
 OpenSearch plugins. We decide that a feature should be a plugin rather than shipped as a module because we feel that it is only important to a subset of users, especially if it requires extra dependencies.
