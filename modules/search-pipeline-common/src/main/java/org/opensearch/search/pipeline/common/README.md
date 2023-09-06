@@ -71,9 +71,11 @@ boolean foundField = false;
 		return response;
 	}
 
-4. (Optional) Create a factory to encapsulate the behavior of the class so that processors can be handled uniformly. 
+4. Create a factory to encapsulate the behavior of the class so that processors can be handled uniformly. 
 
-5. After creating a search processor, the operator can use it in their search pipeline. 
+5. Add the newly added search processor to the `SearchPieplineCommonModulePlugin` getter for the corresponding processor type. 
+
+6. After creating a search processor, the operator can use it in their search pipeline. 
 
 To use the new processor, make sure the cluster is reloaded and that the new processor is accessible.
 
