@@ -44,6 +44,9 @@ public class SearchPipelineCommonModulePlugin extends Plugin implements SearchPi
 
     @Override
     public Map<String, Processor.Factory<SearchResponseProcessor>> getResponseProcessors(Parameters parameters) {
-        return Map.of(RenameFieldResponseProcessor.TYPE, new RenameFieldResponseProcessor.Factory());
+        return Map.of(RenameFieldResponseProcessor.TYPE,
+                new RenameFieldResponseProcessor.Factory(),
+                DeleteFieldResponseProcessor.TYPE,
+                new DeleteFieldResponseProcessor.Factory());
     }
 }
