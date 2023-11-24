@@ -9,6 +9,7 @@
 package org.opensearch.action.admin.cluster.remotestore.stats;
 
 import org.opensearch.cluster.routing.ShardRouting;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.core.common.io.stream.Writeable;
@@ -22,8 +23,9 @@ import java.io.IOException;
 /**
  * Encapsulates all remote store stats
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "2.8.0")
 public class RemoteStoreStats implements Writeable, ToXContentFragment {
     /**
      * Stats related to Remote Segment Store operations
@@ -118,10 +120,10 @@ public class RemoteStoreStats implements Writeable, ToXContentFragment {
             .field(SubFields.SUCCEEDED, remoteTranslogShardStats.totalUploadsSucceeded);
         builder.endObject();
 
-        builder.startObject(UploadStatsFields.TOTAL_UPLOADS_IN_BYTES);
-        builder.field(SubFields.STARTED, remoteTranslogShardStats.uploadBytesStarted)
-            .field(SubFields.FAILED, remoteTranslogShardStats.uploadBytesFailed)
-            .field(SubFields.SUCCEEDED, remoteTranslogShardStats.uploadBytesSucceeded);
+        builder.startObject(UploadStatsFields.TOTAL_UPLOAD_SIZE);
+        builder.field(SubFields.STARTED_BYTES, remoteTranslogShardStats.uploadBytesStarted)
+            .field(SubFields.FAILED_BYTES, remoteTranslogShardStats.uploadBytesFailed)
+            .field(SubFields.SUCCEEDED_BYTES, remoteTranslogShardStats.uploadBytesSucceeded);
         builder.endObject();
 
         builder.field(UploadStatsFields.TOTAL_UPLOAD_TIME_IN_MILLIS, remoteTranslogShardStats.totalUploadTimeInMillis);
@@ -146,8 +148,8 @@ public class RemoteStoreStats implements Writeable, ToXContentFragment {
         builder.field(SubFields.SUCCEEDED, remoteTranslogShardStats.totalDownloadsSucceeded);
         builder.endObject();
 
-        builder.startObject(DownloadStatsFields.TOTAL_DOWNLOADS_IN_BYTES);
-        builder.field(SubFields.SUCCEEDED, remoteTranslogShardStats.downloadBytesSucceeded);
+        builder.startObject(DownloadStatsFields.TOTAL_DOWNLOAD_SIZE);
+        builder.field(SubFields.SUCCEEDED_BYTES, remoteTranslogShardStats.downloadBytesSucceeded);
         builder.endObject();
 
         builder.field(DownloadStatsFields.TOTAL_DOWNLOAD_TIME_IN_MILLIS, remoteTranslogShardStats.totalDownloadTimeInMillis);
@@ -173,15 +175,15 @@ public class RemoteStoreStats implements Writeable, ToXContentFragment {
             .field(UploadStatsFields.BYTES_LAG, remoteSegmentShardStats.bytesLag)
             .field(UploadStatsFields.BACKPRESSURE_REJECTION_COUNT, remoteSegmentShardStats.rejectionCount)
             .field(UploadStatsFields.CONSECUTIVE_FAILURE_COUNT, remoteSegmentShardStats.consecutiveFailuresCount);
-        builder.startObject(UploadStatsFields.TOTAL_SYNCS_TO_REMOTE)
+        builder.startObject(UploadStatsFields.TOTAL_UPLOADS)
             .field(SubFields.STARTED, remoteSegmentShardStats.totalUploadsStarted)
             .field(SubFields.SUCCEEDED, remoteSegmentShardStats.totalUploadsSucceeded)
             .field(SubFields.FAILED, remoteSegmentShardStats.totalUploadsFailed);
         builder.endObject();
-        builder.startObject(UploadStatsFields.TOTAL_UPLOADS_IN_BYTES)
-            .field(SubFields.STARTED, remoteSegmentShardStats.uploadBytesStarted)
-            .field(SubFields.SUCCEEDED, remoteSegmentShardStats.uploadBytesSucceeded)
-            .field(SubFields.FAILED, remoteSegmentShardStats.uploadBytesFailed);
+        builder.startObject(UploadStatsFields.TOTAL_UPLOAD_SIZE)
+            .field(SubFields.STARTED_BYTES, remoteSegmentShardStats.uploadBytesStarted)
+            .field(SubFields.SUCCEEDED_BYTES, remoteSegmentShardStats.uploadBytesSucceeded)
+            .field(SubFields.FAILED_BYTES, remoteSegmentShardStats.uploadBytesFailed);
         builder.endObject();
         builder.startObject(UploadStatsFields.REMOTE_REFRESH_SIZE_IN_BYTES)
             .field(SubFields.LAST_SUCCESSFUL, remoteSegmentShardStats.lastSuccessfulRemoteRefreshBytes)
@@ -200,10 +202,10 @@ public class RemoteStoreStats implements Writeable, ToXContentFragment {
             DownloadStatsFields.LAST_SYNC_TIMESTAMP,
             remoteSegmentShardStats.directoryFileTransferTrackerStats.lastTransferTimestampMs
         );
-        builder.startObject(DownloadStatsFields.TOTAL_DOWNLOADS_IN_BYTES)
-            .field(SubFields.STARTED, remoteSegmentShardStats.directoryFileTransferTrackerStats.transferredBytesStarted)
-            .field(SubFields.SUCCEEDED, remoteSegmentShardStats.directoryFileTransferTrackerStats.transferredBytesSucceeded)
-            .field(SubFields.FAILED, remoteSegmentShardStats.directoryFileTransferTrackerStats.transferredBytesFailed);
+        builder.startObject(DownloadStatsFields.TOTAL_DOWNLOAD_SIZE)
+            .field(SubFields.STARTED_BYTES, remoteSegmentShardStats.directoryFileTransferTrackerStats.transferredBytesStarted)
+            .field(SubFields.SUCCEEDED_BYTES, remoteSegmentShardStats.directoryFileTransferTrackerStats.transferredBytesSucceeded)
+            .field(SubFields.FAILED_BYTES, remoteSegmentShardStats.directoryFileTransferTrackerStats.transferredBytesFailed);
         builder.endObject();
         builder.startObject(DownloadStatsFields.DOWNLOAD_SIZE_IN_BYTES)
             .field(SubFields.LAST_SUCCESSFUL, remoteSegmentShardStats.directoryFileTransferTrackerStats.lastSuccessfulTransferInBytes)
@@ -240,7 +242,7 @@ public class RemoteStoreStats implements Writeable, ToXContentFragment {
     /**
      * Fields for remote store stats response
      */
-    static final class UploadStatsFields {
+    public static final class UploadStatsFields {
         /**
          * Lag in terms of bytes b/w local and remote store
          */
@@ -277,11 +279,6 @@ public class RemoteStoreStats implements Writeable, ToXContentFragment {
         static final String CONSECUTIVE_FAILURE_COUNT = "consecutive_failure_count";
 
         /**
-         * Represents the number of remote refreshes
-         */
-        static final String TOTAL_SYNCS_TO_REMOTE = "total_syncs_to_remote";
-
-        /**
          * Represents the size of new data to be uploaded as part of a refresh
          */
         static final String REMOTE_REFRESH_SIZE_IN_BYTES = "remote_refresh_size_in_bytes";
@@ -299,12 +296,12 @@ public class RemoteStoreStats implements Writeable, ToXContentFragment {
         /**
          * Count of files uploaded to remote store
          */
-        static final String TOTAL_UPLOADS = "total_uploads";
+        public static final String TOTAL_UPLOADS = "total_uploads";
 
         /**
          * Represents the total uploads to remote store in bytes
          */
-        static final String TOTAL_UPLOADS_IN_BYTES = "total_uploads_in_bytes";
+        public static final String TOTAL_UPLOAD_SIZE = "total_upload_size";
 
         /**
          * Total time spent on remote store uploads
@@ -351,7 +348,7 @@ public class RemoteStoreStats implements Writeable, ToXContentFragment {
         /**
          * Total bytes of files downloaded from the remote store
          */
-        static final String TOTAL_DOWNLOADS_IN_BYTES = "total_downloads_in_bytes";
+        static final String TOTAL_DOWNLOAD_SIZE = "total_download_size";
 
         /**
          * Average size of a file downloaded from the remote store
@@ -372,13 +369,17 @@ public class RemoteStoreStats implements Writeable, ToXContentFragment {
     /**
      * Reusable sub fields for {@link UploadStatsFields} and {@link DownloadStatsFields}
      */
-    static final class SubFields {
-        static final String STARTED = "started";
-        static final String SUCCEEDED = "succeeded";
-        static final String FAILED = "failed";
+    public static final class SubFields {
+        public static final String STARTED = "started";
+        public static final String SUCCEEDED = "succeeded";
+        public static final String FAILED = "failed";
+
+        public static final String STARTED_BYTES = "started_bytes";
+        public static final String SUCCEEDED_BYTES = "succeeded_bytes";
+        public static final String FAILED_BYTES = "failed_bytes";
 
         static final String DOWNLOAD = "download";
-        static final String UPLOAD = "upload";
+        public static final String UPLOAD = "upload";
 
         /**
          * Moving avg over last N values stat

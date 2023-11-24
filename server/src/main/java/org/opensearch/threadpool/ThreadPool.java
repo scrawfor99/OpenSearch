@@ -115,14 +115,16 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
         public static final String TRANSLOG_SYNC = "translog_sync";
         public static final String REMOTE_PURGE = "remote_purge";
         public static final String REMOTE_REFRESH_RETRY = "remote_refresh_retry";
+        public static final String REMOTE_RECOVERY = "remote_recovery";
         public static final String INDEX_SEARCHER = "index_searcher";
     }
 
     /**
      * The threadpool type.
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public enum ThreadPoolType {
         DIRECT("direct"),
         FIXED("fixed"),
@@ -184,6 +186,7 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
         map.put(Names.TRANSLOG_SYNC, ThreadPoolType.FIXED);
         map.put(Names.REMOTE_PURGE, ThreadPoolType.SCALING);
         map.put(Names.REMOTE_REFRESH_RETRY, ThreadPoolType.SCALING);
+        map.put(Names.REMOTE_RECOVERY, ThreadPoolType.SCALING);
         if (FeatureFlags.isEnabled(FeatureFlags.CONCURRENT_SEGMENT_SEARCH)) {
             map.put(Names.INDEX_SEARCHER, ThreadPoolType.RESIZABLE);
         }
@@ -269,6 +272,15 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
             Names.REMOTE_REFRESH_RETRY,
             new ScalingExecutorBuilder(Names.REMOTE_REFRESH_RETRY, 1, halfProcMaxAt10, TimeValue.timeValueMinutes(5))
         );
+        builders.put(
+            Names.REMOTE_RECOVERY,
+            new ScalingExecutorBuilder(
+                Names.REMOTE_RECOVERY,
+                1,
+                twiceAllocatedProcessors(allocatedProcessors),
+                TimeValue.timeValueMinutes(5)
+            )
+        );
         if (FeatureFlags.isEnabled(FeatureFlags.CONCURRENT_SEGMENT_SEARCH)) {
             builders.put(
                 Names.INDEX_SEARCHER,
@@ -314,7 +326,7 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
 
     /**
      * Returns a value of milliseconds that may be used for relative time calculations.
-     *
+     * <p>
      * This method should only be used for calculating time deltas. For an epoch based
      * timestamp, see {@link #absoluteTimeInMillis()}.
      */
@@ -324,7 +336,7 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
 
     /**
      * Returns a value of nanoseconds that may be used for relative time calculations.
-     *
+     * <p>
      * This method should only be used for calculating time deltas. For an epoch based
      * timestamp, see {@link #absoluteTimeInMillis()}.
      */
@@ -337,7 +349,7 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
      * that require the highest precision possible. Performance critical code must use
      * either {@link #relativeTimeInNanos()} or {@link #relativeTimeInMillis()} which
      * give better performance at the cost of lower precision.
-     *
+     * <p>
      * This method should only be used for calculating time deltas. For an epoch based
      * timestamp, see {@link #absoluteTimeInMillis()}.
      */
@@ -347,7 +359,7 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
 
     /**
      * Returns the value of milliseconds since UNIX epoch.
-     *
+     * <p>
      * This method should only be used for exact date/time formatting. For calculating
      * time deltas that should not suffer from negative deltas, which are possible with
      * this method, see {@link #relativeTimeInMillis()}.
@@ -383,19 +395,21 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
             long rejected = -1;
             int largest = -1;
             long completed = -1;
-            if (holder.executor() instanceof ThreadPoolExecutor) {
-                ThreadPoolExecutor threadPoolExecutor = (ThreadPoolExecutor) holder.executor();
+            long waitTimeNanos = -1;
+            if (holder.executor() instanceof OpenSearchThreadPoolExecutor) {
+                OpenSearchThreadPoolExecutor threadPoolExecutor = (OpenSearchThreadPoolExecutor) holder.executor();
                 threads = threadPoolExecutor.getPoolSize();
                 queue = threadPoolExecutor.getQueue().size();
                 active = threadPoolExecutor.getActiveCount();
                 largest = threadPoolExecutor.getLargestPoolSize();
                 completed = threadPoolExecutor.getCompletedTaskCount();
+                waitTimeNanos = threadPoolExecutor.getPoolWaitTimeNanos();
                 RejectedExecutionHandler rejectedExecutionHandler = threadPoolExecutor.getRejectedExecutionHandler();
                 if (rejectedExecutionHandler instanceof XRejectedExecutionHandler) {
                     rejected = ((XRejectedExecutionHandler) rejectedExecutionHandler).rejected();
                 }
             }
-            stats.add(new ThreadPoolStats.Stats(name, threads, queue, active, rejected, largest, completed));
+            stats.add(new ThreadPoolStats.Stats(name, threads, queue, active, rejected, largest, completed, waitTimeNanos));
         }
         return new ThreadPoolStats(stats);
     }
@@ -641,7 +655,7 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
     /**
      * A thread to cache millisecond time values from
      * {@link System#nanoTime()} and {@link System#currentTimeMillis()}.
-     *
+     * <p>
      * The values are updated at a specified interval.
      */
     static class CachedTimeThread extends Thread {
@@ -721,8 +735,9 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
     /**
      * The thread pool information.
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public static class Info implements Writeable, ToXContentFragment {
 
         private final String name;

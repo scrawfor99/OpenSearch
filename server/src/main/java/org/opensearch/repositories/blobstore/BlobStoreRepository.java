@@ -100,6 +100,7 @@ import org.opensearch.core.common.unit.ByteSizeValue;
 import org.opensearch.core.compress.Compressor;
 import org.opensearch.core.compress.CompressorRegistry;
 import org.opensearch.core.compress.NotXContentException;
+import org.opensearch.core.index.Index;
 import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.core.index.snapshots.IndexShardSnapshotFailedException;
 import org.opensearch.core.util.BytesRefUtils;
@@ -148,6 +149,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -171,6 +173,7 @@ import java.util.stream.LongStream;
 import java.util.stream.Stream;
 
 import static org.opensearch.index.snapshots.blobstore.BlobStoreIndexShardSnapshot.FileInfo.canonicalName;
+import static org.opensearch.repositories.blobstore.ChecksumBlobStoreFormat.SNAPSHOT_ONLY_FORMAT_PARAMS;
 
 /**
  * BlobStore - based implementation of Snapshot Repository
@@ -286,21 +289,30 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
      */
     public static final Setting<Boolean> READONLY_SETTING = Setting.boolSetting("readonly", false, Setting.Property.NodeScope);
 
-    protected final boolean supportURLRepo;
+    /***
+     * Setting to set repository as system repository
+     */
+    public static final Setting<Boolean> SYSTEM_REPOSITORY_SETTING = Setting.boolSetting(
+        "system_repository",
+        false,
+        Setting.Property.NodeScope
+    );
 
-    private final int maxShardBlobDeleteBatch;
+    protected volatile boolean supportURLRepo;
 
-    private final Compressor compressor;
+    private volatile int maxShardBlobDeleteBatch;
 
-    private final boolean cacheRepositoryData;
+    private volatile Compressor compressor;
 
-    private final RateLimiter snapshotRateLimiter;
+    private volatile boolean cacheRepositoryData;
 
-    private final RateLimiter restoreRateLimiter;
+    private volatile RateLimiter snapshotRateLimiter;
 
-    private final RateLimiter remoteUploadRateLimiter;
+    private volatile RateLimiter restoreRateLimiter;
 
-    private final RateLimiter remoteDownloadRateLimiter;
+    private volatile RateLimiter remoteUploadRateLimiter;
+
+    private volatile RateLimiter remoteDownloadRateLimiter;
 
     private final CounterMetric snapshotRateLimitingTimeInNanos = new CounterMetric();
 
@@ -345,7 +357,9 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
         BlobStoreIndexShardSnapshots::fromXContent
     );
 
-    private final boolean readOnly;
+    private volatile boolean readOnly;
+
+    private final boolean isSystemRepository;
 
     private final Object lock = new Object();
 
@@ -353,7 +367,7 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
 
     private final SetOnce<BlobStore> blobStore = new SetOnce<>();
 
-    private final ClusterService clusterService;
+    protected final ClusterService clusterService;
 
     private final RecoverySettings recoverySettings;
 
@@ -387,26 +401,43 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
     /**
      * IO buffer size hint for reading and writing to the underlying blob store.
      */
-    protected final int bufferSize;
+    protected volatile int bufferSize;
 
     /**
      * Constructs new BlobStoreRepository
-     * @param metadata   The metadata for this repository including name and settings
+     * @param repositoryMetadata   The metadata for this repository including name and settings
      * @param clusterService ClusterService
      */
     protected BlobStoreRepository(
-        final RepositoryMetadata metadata,
-        final boolean compress,
+        final RepositoryMetadata repositoryMetadata,
         final NamedXContentRegistry namedXContentRegistry,
         final ClusterService clusterService,
         final RecoverySettings recoverySettings
     ) {
-        this.metadata = metadata;
+        // Read RepositoryMetadata as the first step
+        readRepositoryMetadata(repositoryMetadata);
+
+        isSystemRepository = SYSTEM_REPOSITORY_SETTING.get(metadata.settings());
         this.namedXContentRegistry = namedXContentRegistry;
         this.threadPool = clusterService.getClusterApplierService().threadPool();
         this.clusterService = clusterService;
         this.recoverySettings = recoverySettings;
-        this.supportURLRepo = SUPPORT_URL_REPO.get(metadata.settings());
+    }
+
+    @Override
+    public void reload(RepositoryMetadata repositoryMetadata) {
+        readRepositoryMetadata(repositoryMetadata);
+    }
+
+    /**
+     * Reloads the values derived from the Repository Metadata
+     *
+     * @param repositoryMetadata RepositoryMetadata instance to derive the values from
+     */
+    private void readRepositoryMetadata(RepositoryMetadata repositoryMetadata) {
+        this.metadata = repositoryMetadata;
+
+        supportURLRepo = SUPPORT_URL_REPO.get(metadata.settings());
         snapshotRateLimiter = getRateLimiter(metadata.settings(), "max_snapshot_bytes_per_sec", new ByteSizeValue(40, ByteSizeUnit.MB));
         restoreRateLimiter = getRateLimiter(metadata.settings(), "max_restore_bytes_per_sec", ByteSizeValue.ZERO);
         remoteUploadRateLimiter = getRateLimiter(metadata.settings(), "max_remote_upload_bytes_per_sec", ByteSizeValue.ZERO);
@@ -415,7 +446,9 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
         cacheRepositoryData = CACHE_REPOSITORY_DATA.get(metadata.settings());
         bufferSize = Math.toIntExact(BUFFER_SIZE_SETTING.get(metadata.settings()).getBytes());
         maxShardBlobDeleteBatch = MAX_SNAPSHOT_SHARD_BLOB_DELETE_BATCH_SIZE.get(metadata.settings());
-        this.compressor = compress ? COMPRESSION_TYPE_SETTING.get(metadata.settings()) : CompressorRegistry.none();
+        compressor = COMPRESS_SETTING.get(metadata.settings())
+            ? COMPRESSION_TYPE_SETTING.get(metadata.settings())
+            : CompressorRegistry.none();
     }
 
     @Override
@@ -818,6 +851,8 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
         final BlobStore store = blobStore.get();
         if (store == null) {
             return RepositoryStats.EMPTY_STATS;
+        } else if (store.extendedStats() != null && store.extendedStats().isEmpty() == false) {
+            return new RepositoryStats(store.extendedStats(), true);
         }
         return new RepositoryStats(store.stats());
     }
@@ -1113,7 +1148,11 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
                                     new RemoteSegmentStoreDirectoryFactory(
                                         remoteStoreLockManagerFactory.getRepositoriesService(),
                                         threadPool
-                                    ).newDirectory(remoteStoreRepoForIndex, indexUUID, shardId).close();
+                                    ).newDirectory(
+                                        remoteStoreRepoForIndex,
+                                        indexUUID,
+                                        new ShardId(Index.UNKNOWN_INDEX_NAME, indexUUID, Integer.valueOf(shardId))
+                                    ).close();
                                 }
                             }
                         }
@@ -1579,7 +1618,11 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
                                             new RemoteSegmentStoreDirectoryFactory(
                                                 remoteStoreLockManagerFactory.getRepositoriesService(),
                                                 threadPool
-                                            ).newDirectory(remoteStoreRepoForIndex, indexUUID, shardBlob.getKey()).close();
+                                            ).newDirectory(
+                                                remoteStoreRepoForIndex,
+                                                indexUUID,
+                                                new ShardId(Index.UNKNOWN_INDEX_NAME, indexUUID, Integer.valueOf(shardBlob.getKey()))
+                                            ).close();
                                         }
                                     }
                                 }
@@ -1831,8 +1874,10 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
                 byte[] testBytes = Strings.toUTF8Bytes(seed);
                 BlobContainer testContainer = blobStore().blobContainer(basePath().add(testBlobPrefix(seed)));
                 BytesArray bytes = new BytesArray(testBytes);
-                try (InputStream stream = bytes.streamInput()) {
-                    testContainer.writeBlobAtomic("master.dat", stream, bytes.length(), true);
+                if (isSystemRepository == false) {
+                    try (InputStream stream = bytes.streamInput()) {
+                        testContainer.writeBlobAtomic("master.dat", stream, bytes.length(), true);
+                    }
                 }
                 return seed;
             }
@@ -2139,6 +2184,11 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
     @Override
     public boolean isReadOnly() {
         return readOnly;
+    }
+
+    @Override
+    public boolean isSystemRepository() {
+        return isSystemRepository;
     }
 
     /**
@@ -2500,7 +2550,7 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
      * the next version number from when the index blob was written.  Each individual index-N blob is
      * only written once and never overwritten.  The highest numbered index-N blob is the latest one
      * that contains the current snapshots in the repository.
-     *
+     * <p>
      * Package private for testing
      */
     long latestIndexBlobId() throws IOException {
@@ -3111,6 +3161,11 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
     }
 
     @Override
+    public List<Setting<?>> getRestrictedSystemRepositorySettings() {
+        return Arrays.asList(SYSTEM_REPOSITORY_SETTING, READONLY_SETTING, REMOTE_STORE_INDEX_SHALLOW_COPY);
+    }
+
+    @Override
     public RemoteStoreShardShallowCopySnapshot getRemoteStoreShallowCopyShardMetadata(
         SnapshotId snapshotId,
         IndexId indexId,
@@ -3131,7 +3186,9 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
 
     @Override
     public void verify(String seed, DiscoveryNode localNode) {
-        assertSnapshotOrGenericThread();
+        if (isSystemRepository == false) {
+            assertSnapshotOrGenericThread();
+        }
         if (isReadOnly()) {
             try {
                 latestIndexBlobId();
@@ -3156,30 +3213,33 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
                     exp
                 );
             }
-            try (InputStream masterDat = testBlobContainer.readBlob("master.dat")) {
-                final String seedRead = Streams.readFully(masterDat).utf8ToString();
-                if (seedRead.equals(seed) == false) {
+
+            if (isSystemRepository == false) {
+                try (InputStream masterDat = testBlobContainer.readBlob("master.dat")) {
+                    final String seedRead = Streams.readFully(masterDat).utf8ToString();
+                    if (seedRead.equals(seed) == false) {
+                        throw new RepositoryVerificationException(
+                            metadata.name(),
+                            "Seed read from master.dat was [" + seedRead + "] but expected seed [" + seed + "]"
+                        );
+                    }
+                } catch (NoSuchFileException e) {
                     throw new RepositoryVerificationException(
                         metadata.name(),
-                        "Seed read from master.dat was [" + seedRead + "] but expected seed [" + seed + "]"
+                        "a file written by cluster-manager to the store ["
+                            + blobStore()
+                            + "] cannot be accessed on the node ["
+                            + localNode
+                            + "]. "
+                            + "This might indicate that the store ["
+                            + blobStore()
+                            + "] is not shared between this node and the cluster-manager node or "
+                            + "that permissions on the store don't allow reading files written by the cluster-manager node",
+                        e
                     );
+                } catch (Exception e) {
+                    throw new RepositoryVerificationException(metadata.name(), "Failed to verify repository", e);
                 }
-            } catch (NoSuchFileException e) {
-                throw new RepositoryVerificationException(
-                    metadata.name(),
-                    "a file written by cluster-manager to the store ["
-                        + blobStore()
-                        + "] cannot be accessed on the node ["
-                        + localNode
-                        + "]. "
-                        + "This might indicate that the store ["
-                        + blobStore()
-                        + "] is not shared between this node and the cluster-manager node or "
-                        + "that permissions on the store don't allow reading files written by the cluster-manager node",
-                    e
-                );
-            } catch (Exception e) {
-                throw new RepositoryVerificationException(metadata.name(), "Failed to verify repository", e);
             }
         }
     }
@@ -3276,7 +3336,12 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
             () -> new ParameterizedMessage("[{}] Writing shard index [{}] to [{}]", metadata.name(), indexGeneration, shardContainer.path())
         );
         final String blobName = INDEX_SHARD_SNAPSHOTS_FORMAT.blobName(String.valueOf(indexGeneration));
-        writeAtomic(shardContainer, blobName, INDEX_SHARD_SNAPSHOTS_FORMAT.serialize(updatedSnapshots, blobName, compressor), true);
+        writeAtomic(
+            shardContainer,
+            blobName,
+            INDEX_SHARD_SNAPSHOTS_FORMAT.serialize(updatedSnapshots, blobName, compressor, SNAPSHOT_ONLY_FORMAT_PARAMS),
+            true
+        );
     }
 
     // Unused blobs are all previous index-, data- and meta-blobs and that are not referenced by the new index- as well as all

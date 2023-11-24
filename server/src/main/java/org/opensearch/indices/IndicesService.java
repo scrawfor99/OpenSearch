@@ -47,6 +47,7 @@ import org.opensearch.action.admin.indices.stats.CommonStatsFlags;
 import org.opensearch.action.admin.indices.stats.CommonStatsFlags.Flag;
 import org.opensearch.action.admin.indices.stats.IndexShardStats;
 import org.opensearch.action.admin.indices.stats.ShardStats;
+import org.opensearch.action.search.SearchRequestStats;
 import org.opensearch.action.search.SearchType;
 import org.opensearch.client.Client;
 import org.opensearch.cluster.ClusterState;
@@ -60,6 +61,7 @@ import org.opensearch.common.CheckedConsumer;
 import org.opensearch.common.CheckedFunction;
 import org.opensearch.common.CheckedSupplier;
 import org.opensearch.common.Nullable;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.io.stream.BytesStreamOutput;
 import org.opensearch.common.lease.Releasable;
 import org.opensearch.common.lifecycle.AbstractLifecycleComponent;
@@ -69,7 +71,6 @@ import org.opensearch.common.settings.Setting.Property;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.util.BigArrays;
-import org.opensearch.common.util.FeatureFlags;
 import org.opensearch.common.util.concurrent.AbstractRefCounted;
 import org.opensearch.common.util.concurrent.AbstractRunnable;
 import org.opensearch.common.util.concurrent.OpenSearchExecutors;
@@ -133,6 +134,7 @@ import org.opensearch.index.shard.IndexShard;
 import org.opensearch.index.shard.IndexShardState;
 import org.opensearch.index.shard.IndexingOperationListener;
 import org.opensearch.index.shard.IndexingStats;
+import org.opensearch.index.shard.IndexingStats.Stats.DocStatusStats;
 import org.opensearch.index.store.remote.filecache.FileCacheCleaner;
 import org.opensearch.index.translog.InternalTranslogFactory;
 import org.opensearch.index.translog.RemoteBlobStoreInternalTranslogFactory;
@@ -143,6 +145,7 @@ import org.opensearch.indices.fielddata.cache.IndicesFieldDataCache;
 import org.opensearch.indices.mapper.MapperRegistry;
 import org.opensearch.indices.recovery.PeerRecoveryTargetService;
 import org.opensearch.indices.recovery.RecoveryListener;
+import org.opensearch.indices.recovery.RecoverySettings;
 import org.opensearch.indices.recovery.RecoveryState;
 import org.opensearch.indices.replication.checkpoint.SegmentReplicationCheckpointPublisher;
 import org.opensearch.indices.replication.common.ReplicationType;
@@ -203,8 +206,9 @@ import static org.opensearch.search.SearchService.ALLOW_EXPENSIVE_QUERIES;
 /**
  * Main OpenSearch indices service
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class IndicesService extends AbstractLifecycleComponent
     implements
         IndicesClusterStateService.AllocatedIndices<IndexShard, IndexService>,
@@ -239,36 +243,6 @@ public class IndicesService extends AbstractLifecycleComponent
         CLUSTER_SETTING_REPLICATION_TYPE,
         ReplicationType.DOCUMENT.toString(),
         ReplicationType::parseString,
-        Property.NodeScope,
-        Property.Final
-    );
-
-    /**
-     * Used to specify if all indexes are to create with remote store enabled by default
-     */
-    public static final Setting<Boolean> CLUSTER_REMOTE_STORE_ENABLED_SETTING = Setting.boolSetting(
-        "cluster.remote_store.enabled",
-        false,
-        Property.NodeScope,
-        Property.Final
-    );
-
-    /**
-     * Used to specify default repo to use for segment upload for remote store backed indices
-     */
-    public static final Setting<String> CLUSTER_REMOTE_SEGMENT_STORE_REPOSITORY_SETTING = Setting.simpleString(
-        "cluster.remote_store.segment.repository",
-        "",
-        Property.NodeScope,
-        Property.Final
-    );
-
-    /**
-     * Used to specify default repo to use for translog upload for remote store backed indices
-     */
-    public static final Setting<String> CLUSTER_REMOTE_TRANSLOG_REPOSITORY_SETTING = Setting.simpleString(
-        "cluster.remote_store.translog.repository",
-        "",
         Property.NodeScope,
         Property.Final
     );
@@ -316,6 +290,18 @@ public class IndicesService extends AbstractLifecycleComponent
     );
 
     /**
+     * This setting is used to restrict creation or updation of index where the `index.translog.durability` index setting
+     * is set as ASYNC if enabled. If disabled, any of the durability mode can be used and switched at any later time from
+     * one to another.
+     */
+    public static final Setting<Boolean> CLUSTER_REMOTE_INDEX_RESTRICT_ASYNC_DURABILITY_SETTING = Setting.boolSetting(
+        "cluster.remote_store.index.restrict.async-durability",
+        false,
+        Property.NodeScope,
+        Property.Final
+    );
+
+    /**
      * The node's settings.
      */
     private final Settings settings;
@@ -352,6 +338,7 @@ public class IndicesService extends AbstractLifecycleComponent
     private final CountDownLatch closeLatch = new CountDownLatch(1);
     private volatile boolean idFieldDataEnabled;
     private volatile boolean allowExpensiveQueries;
+    private final RecoverySettings recoverySettings;
 
     @Nullable
     private final OpenSearchThreadPoolExecutor danglingIndicesThreadPoolExecutor;
@@ -363,6 +350,8 @@ public class IndicesService extends AbstractLifecycleComponent
     private volatile TimeValue clusterDefaultRefreshInterval;
     private volatile TimeValue clusterRemoteTranslogBufferInterval;
     private final FileCacheCleaner fileCacheCleaner;
+
+    private final SearchRequestStats searchRequestStats;
 
     @Override
     protected void doStart() {
@@ -394,7 +383,9 @@ public class IndicesService extends AbstractLifecycleComponent
         IndexStorePlugin.DirectoryFactory remoteDirectoryFactory,
         Supplier<RepositoriesService> repositoriesServiceSupplier,
         FileCacheCleaner fileCacheCleaner,
-        @Nullable RemoteStoreStatsTrackerFactory remoteStoreStatsTrackerFactory
+        SearchRequestStats searchRequestStats,
+        @Nullable RemoteStoreStatsTrackerFactory remoteStoreStatsTrackerFactory,
+        RecoverySettings recoverySettings
     ) {
         this.settings = settings;
         this.threadPool = threadPool;
@@ -484,15 +475,14 @@ public class IndicesService extends AbstractLifecycleComponent
         clusterService.getClusterSettings().addSettingsUpdateConsumer(ALLOW_EXPENSIVE_QUERIES, this::setAllowExpensiveQueries);
         this.remoteDirectoryFactory = remoteDirectoryFactory;
         this.translogFactorySupplier = getTranslogFactorySupplier(repositoriesServiceSupplier, threadPool, remoteStoreStatsTrackerFactory);
+        this.searchRequestStats = searchRequestStats;
         this.clusterDefaultRefreshInterval = CLUSTER_DEFAULT_INDEX_REFRESH_INTERVAL_SETTING.get(clusterService.getSettings());
         clusterService.getClusterSettings()
             .addSettingsUpdateConsumer(CLUSTER_DEFAULT_INDEX_REFRESH_INTERVAL_SETTING, this::onRefreshIntervalUpdate);
-
-        if (FeatureFlags.isEnabled(FeatureFlags.REMOTE_STORE)) {
-            this.clusterRemoteTranslogBufferInterval = CLUSTER_REMOTE_TRANSLOG_BUFFER_INTERVAL_SETTING.get(clusterService.getSettings());
-            clusterService.getClusterSettings()
-                .addSettingsUpdateConsumer(CLUSTER_REMOTE_TRANSLOG_BUFFER_INTERVAL_SETTING, this::setClusterRemoteTranslogBufferInterval);
-        }
+        this.clusterRemoteTranslogBufferInterval = CLUSTER_REMOTE_TRANSLOG_BUFFER_INTERVAL_SETTING.get(clusterService.getSettings());
+        clusterService.getClusterSettings()
+            .addSettingsUpdateConsumer(CLUSTER_REMOTE_TRANSLOG_BUFFER_INTERVAL_SETTING, this::setClusterRemoteTranslogBufferInterval);
+        this.recoverySettings = recoverySettings;
     }
 
     /**
@@ -610,7 +600,7 @@ public class IndicesService extends AbstractLifecycleComponent
             }
         }
 
-        return new NodeIndicesStats(commonStats, statsByShard(this, flags));
+        return new NodeIndicesStats(commonStats, statsByShard(this, flags), searchRequestStats);
     }
 
     Map<Index, List<IndexShardStats>> statsByShard(final IndicesService indicesService, final CommonStatsFlags flags) {
@@ -890,7 +880,8 @@ public class IndicesService extends AbstractLifecycleComponent
             remoteDirectoryFactory,
             translogFactorySupplier,
             this::getClusterDefaultRefreshInterval,
-            this::getClusterRemoteTranslogBufferInterval
+            this::getClusterRemoteTranslogBufferInterval,
+            this.recoverySettings
         );
     }
 
@@ -937,7 +928,7 @@ public class IndicesService extends AbstractLifecycleComponent
     /**
      * creates a new mapper service for the given index, in order to do administrative work like mapping updates.
      * This *should not* be used for document parsing. Doing so will result in an exception.
-     *
+     * <p>
      * Note: the returned {@link MapperService} should be closed when unneeded.
      */
     public synchronized MapperService createIndexMapperService(IndexMetadata indexMetadata) throws IOException {
@@ -1076,6 +1067,15 @@ public class IndicesService extends AbstractLifecycleComponent
     }
 
     /**
+     * Accumulate stats from the passed Object
+     *
+     * @param stats Instance storing {@link DocStatusStats}
+     */
+    public void addDocStatusStats(final DocStatusStats stats) {
+        oldShardsStats.indexingStats.getTotal().getDocStatusStats().add(stats);
+    }
+
+    /**
      * Statistics for old shards
      *
      * @opensearch.internal
@@ -1140,7 +1140,7 @@ public class IndicesService extends AbstractLifecycleComponent
     /**
      * Deletes the index store trying to acquire all shards locks for this index.
      * This method will delete the metadata for the index even if the actual shards can't be locked.
-     *
+     * <p>
      * Package private for testing
      */
     void deleteIndexStore(String reason, IndexMetadata metadata) throws IOException {
@@ -1221,7 +1221,7 @@ public class IndicesService extends AbstractLifecycleComponent
      * This method deletes the shard contents on disk for the given shard ID. This method will fail if the shard deleting
      * is prevented by {@link #canDeleteShardContent(ShardId, IndexSettings)}
      * of if the shards lock can not be acquired.
-     *
+     * <p>
      * On data nodes, if the deleted shard is the last shard folder in its index, the method will attempt to remove
      * the index folder as well.
      *
@@ -1322,7 +1322,10 @@ public class IndicesService extends AbstractLifecycleComponent
 
     /**
      * result type returned by {@link #canDeleteShardContent signaling different reasons why a shard can / cannot be deleted}
+     *
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public enum ShardDeletionCheckResult {
         FOLDER_FOUND_CAN_DELETE, // shard data exists and can be deleted
         STILL_ALLOCATED, // the shard is still allocated / active on this node

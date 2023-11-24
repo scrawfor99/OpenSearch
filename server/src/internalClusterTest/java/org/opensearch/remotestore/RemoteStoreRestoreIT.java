@@ -10,98 +10,34 @@ package org.opensearch.remotestore;
 
 import org.opensearch.action.admin.cluster.remotestore.restore.RestoreRemoteStoreRequest;
 import org.opensearch.action.admin.cluster.remotestore.restore.RestoreRemoteStoreResponse;
-import org.opensearch.action.index.IndexResponse;
 import org.opensearch.action.support.PlainActionFuture;
 import org.opensearch.cluster.health.ClusterHealthStatus;
+import org.opensearch.cluster.node.DiscoveryNode;
+import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.core.common.unit.ByteSizeUnit;
-import org.opensearch.plugins.Plugin;
 import org.opensearch.repositories.RepositoriesService;
+import org.opensearch.repositories.Repository;
 import org.opensearch.test.InternalTestCluster;
 import org.opensearch.test.OpenSearchIntegTestCase;
-import org.opensearch.test.transport.MockTransportService;
-import org.junit.Before;
 
 import java.io.IOException;
-import java.util.Arrays;
-import java.util.Collection;
+import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
+import static org.opensearch.node.remotestore.RemoteStoreNodeAttribute.REMOTE_STORE_REPOSITORY_SETTINGS_ATTRIBUTE_KEY_PREFIX;
 import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertAcked;
 import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertHitCount;
 import static org.hamcrest.Matchers.greaterThan;
 
 @OpenSearchIntegTestCase.ClusterScope(scope = OpenSearchIntegTestCase.Scope.SUITE, numDataNodes = 0)
-public class RemoteStoreRestoreIT extends RemoteStoreBaseIntegTestCase {
-    private static final String INDEX_NAME = "remote-store-test-idx-1";
-    private static final String INDEX_NAMES = "test-remote-store-1,test-remote-store-2,remote-store-test-index-1,remote-store-test-index-2";
-    private static final String INDEX_NAMES_WILDCARD = "test-remote-store-*,remote-store-test-index-*";
-    private static final String TOTAL_OPERATIONS = "total-operations";
-    private static final String MAX_SEQ_NO_TOTAL = "max-seq-no-total";
-
-    @Override
-    public Settings indexSettings() {
-        return remoteStoreIndexSettings(0);
-    }
-
-    @Override
-    protected Collection<Class<? extends Plugin>> nodePlugins() {
-        return Arrays.asList(MockTransportService.TestPlugin.class);
-    }
-
-    @Before
-    public void setup() {
-        setupRepo();
-    }
-
-    private void restore(String... indices) {
-        boolean restoreAllShards = randomBoolean();
-        if (restoreAllShards) {
-            assertAcked(client().admin().indices().prepareClose(indices));
-        }
-        client().admin()
-            .cluster()
-            .restoreRemoteStore(
-                new RestoreRemoteStoreRequest().indices(indices).restoreAllShards(restoreAllShards),
-                PlainActionFuture.newFuture()
-            );
-    }
-
-    private void verifyRestoredData(Map<String, Long> indexStats, String indexName) throws Exception {
-        ensureYellowAndNoInitializingShards(indexName);
-        ensureGreen(indexName);
-        // This is to ensure that shards that were already assigned will get latest count
-        refresh(indexName);
-        assertBusy(
-            () -> assertHitCount(client().prepareSearch(indexName).setSize(0).get(), indexStats.get(TOTAL_OPERATIONS)),
-            30,
-            TimeUnit.SECONDS
-        );
-        IndexResponse response = indexSingleDoc(indexName);
-        if (indexStats.containsKey(MAX_SEQ_NO_TOTAL + "-shard-" + response.getShardId().id())) {
-            assertEquals(indexStats.get(MAX_SEQ_NO_TOTAL + "-shard-" + response.getShardId().id()) + 1, response.getSeqNo());
-        }
-        refresh(indexName);
-        assertBusy(
-            () -> assertHitCount(client().prepareSearch(indexName).setSize(0).get(), indexStats.get(TOTAL_OPERATIONS) + 1),
-            30,
-            TimeUnit.SECONDS
-        );
-    }
-
-    private void prepareCluster(int numClusterManagerNodes, int numDataOnlyNodes, String indices, int replicaCount, int shardCount) {
-        internalCluster().startClusterManagerOnlyNodes(numClusterManagerNodes);
-        internalCluster().startDataOnlyNodes(numDataOnlyNodes);
-        for (String index : indices.split(",")) {
-            createIndex(index, remoteStoreIndexSettings(replicaCount, shardCount));
-            ensureYellowAndNoInitializingShards(index);
-            ensureGreen(index);
-        }
-    }
+public class RemoteStoreRestoreIT extends BaseRemoteStoreRestoreIT {
 
     /**
      * Simulates all data restored using Remote Translog Store.
@@ -187,7 +123,7 @@ public class RemoteStoreRestoreIT extends RemoteStoreBaseIntegTestCase {
      * @throws IOException IO Exception.
      */
     private void testRestoreFlow(int numberOfIterations, boolean invokeFlush, int shardCount) throws Exception {
-        prepareCluster(0, 3, INDEX_NAME, 0, shardCount);
+        prepareCluster(1, 3, INDEX_NAME, 0, shardCount);
         Map<String, Long> indexStats = indexData(numberOfIterations, invokeFlush, INDEX_NAME);
         assertEquals(shardCount, getNumShards(INDEX_NAME).totalNumShards);
 
@@ -269,7 +205,7 @@ public class RemoteStoreRestoreIT extends RemoteStoreBaseIntegTestCase {
 
     public void testRestoreFlowAllShardsNoRedIndex() throws InterruptedException {
         int shardCount = randomIntBetween(1, 5);
-        prepareCluster(0, 3, INDEX_NAME, 0, shardCount);
+        prepareCluster(1, 3, INDEX_NAME, 0, shardCount);
         indexData(randomIntBetween(2, 5), true, INDEX_NAME);
         assertEquals(shardCount, getNumShards(INDEX_NAME).totalNumShards);
 
@@ -285,7 +221,7 @@ public class RemoteStoreRestoreIT extends RemoteStoreBaseIntegTestCase {
 
     public void testRestoreFlowNoRedIndex() throws Exception {
         int shardCount = randomIntBetween(1, 5);
-        prepareCluster(0, 3, INDEX_NAME, 0, shardCount);
+        prepareCluster(1, 3, INDEX_NAME, 0, shardCount);
         Map<String, Long> indexStats = indexData(randomIntBetween(2, 5), true, INDEX_NAME);
         assertEquals(shardCount, getNumShards(INDEX_NAME).totalNumShards);
 
@@ -459,22 +395,43 @@ public class RemoteStoreRestoreIT extends RemoteStoreBaseIntegTestCase {
     }
 
     public void testRateLimitedRemoteDownloads() throws Exception {
-        assertAcked(
-            client().admin()
-                .cluster()
-                .preparePutRepository(REPOSITORY_NAME)
-                .setType("fs")
-                .setSettings(
-                    Settings.builder()
-                        .put("location", randomRepoPath())
-                        .put("compress", randomBoolean())
-                        .put("max_remote_download_bytes_per_sec", "2kb")
-                        .put("chunk_size", 200, ByteSizeUnit.BYTES)
-
-                )
-        );
+        clusterSettingsSuppliedByTest = true;
         int shardCount = randomIntBetween(1, 3);
-        prepareCluster(0, 3, INDEX_NAME, 0, shardCount);
+        Path segmentRepoPath = randomRepoPath();
+        Path tlogRepoPath = randomRepoPath();
+        prepareCluster(
+            1,
+            3,
+            INDEX_NAME,
+            0,
+            shardCount,
+            buildRemoteStoreNodeAttributes(REPOSITORY_NAME, segmentRepoPath, REPOSITORY_2_NAME, tlogRepoPath, true)
+        );
+
+        // validate inplace repository metadata update
+        ClusterService clusterService = internalCluster().getInstance(ClusterService.class);
+        DiscoveryNode node = clusterService.localNode();
+        String settingsAttributeKeyPrefix = String.format(
+            Locale.getDefault(),
+            REMOTE_STORE_REPOSITORY_SETTINGS_ATTRIBUTE_KEY_PREFIX,
+            REPOSITORY_NAME
+        );
+        Map<String, String> settingsMap = node.getAttributes()
+            .keySet()
+            .stream()
+            .filter(key -> key.startsWith(settingsAttributeKeyPrefix))
+            .collect(Collectors.toMap(key -> key.replace(settingsAttributeKeyPrefix, ""), key -> node.getAttributes().get(key)));
+        Settings.Builder settings = Settings.builder();
+        settingsMap.entrySet().forEach(entry -> settings.put(entry.getKey(), entry.getValue()));
+        settings.put("location", segmentRepoPath).put("max_remote_download_bytes_per_sec", 4, ByteSizeUnit.KB);
+
+        assertAcked(client().admin().cluster().preparePutRepository(REPOSITORY_NAME).setType("fs").setSettings(settings).get());
+
+        for (RepositoriesService repositoriesService : internalCluster().getDataNodeInstances(RepositoriesService.class)) {
+            Repository segmentRepo = repositoriesService.repository(REPOSITORY_NAME);
+            assertEquals("4096b", segmentRepo.getMetadata().settings().get("max_remote_download_bytes_per_sec"));
+        }
+
         Map<String, Long> indexStats = indexData(5, false, INDEX_NAME);
         assertEquals(shardCount, getNumShards(INDEX_NAME).totalNumShards);
         internalCluster().stopRandomNode(InternalTestCluster.nameFilter(primaryNodeName(INDEX_NAME)));
@@ -485,13 +442,23 @@ public class RemoteStoreRestoreIT extends RemoteStoreBaseIntegTestCase {
             for (RepositoriesService repositoriesService : internalCluster().getDataNodeInstances(RepositoriesService.class)) {
                 downloadPauseTime += repositoriesService.repository(REPOSITORY_NAME).getRemoteDownloadThrottleTimeInNanos();
             }
-            assertThat(downloadPauseTime, greaterThan(TimeValue.timeValueSeconds(randomIntBetween(5, 10)).nanos()));
+            assertThat(downloadPauseTime, greaterThan(TimeValue.timeValueSeconds(randomIntBetween(3, 5)).nanos()));
         }, 30, TimeUnit.SECONDS);
-        ensureGreen(INDEX_NAME);
+        // Waiting for extended period for green state so that rate limit does not cause flakiness
+        ensureGreen(TimeValue.timeValueSeconds(120), INDEX_NAME);
         // This is required to get updated number from already active shards which were not restored
         assertEquals(shardCount, getNumShards(INDEX_NAME).totalNumShards);
         assertEquals(0, getNumShards(INDEX_NAME).numReplicas);
         verifyRestoredData(indexStats, INDEX_NAME);
+
+        // revert repo metadata to pass asserts on repo metadata vs. node attrs during teardown
+        // https://github.com/opensearch-project/OpenSearch/pull/9569#discussion_r1345668700
+        settings.remove("max_remote_download_bytes_per_sec");
+        assertAcked(client().admin().cluster().preparePutRepository(REPOSITORY_NAME).setType("fs").setSettings(settings).get());
+        for (RepositoriesService repositoriesService : internalCluster().getDataNodeInstances(RepositoriesService.class)) {
+            Repository segmentRepo = repositoriesService.repository(REPOSITORY_NAME);
+            assertNull(segmentRepo.getMetadata().settings().get("max_remote_download_bytes_per_sec"));
+        }
     }
 
     // TODO: Restore flow - index aliases

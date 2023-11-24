@@ -402,7 +402,7 @@ public class InternalEngine extends Engine {
      * The main purpose for this is that if we have external refreshes happening we don't issue extra
      * refreshes to clear version map memory etc. this can cause excessive segment creation if heavy indexing
      * is happening and the refresh interval is low (ie. 1 sec)
-     *
+     * <p>
      * This also prevents segment starvation where an internal reader holds on to old segments literally forever
      * since no indexing is happening and refreshes are only happening to the external reader manager, while with
      * this specialized implementation an external refresh will immediately be reflected on the internal reader
@@ -2038,7 +2038,7 @@ public class InternalEngine extends Engine {
             throw ex;
         } catch (Exception e) {
             try {
-                maybeFailEngine("force merge", e);
+                maybeFailEngine(FORCE_MERGE, e);
             } catch (Exception inner) {
                 e.addSuppressed(inner);
             }
@@ -2488,7 +2488,7 @@ public class InternalEngine extends Engine {
                      * confidence that the call stack does not contain catch statements that would cause the error that might be thrown
                      * here from being caught and never reaching the uncaught exception handler.
                      */
-                    failEngine("merge failed", new MergePolicy.MergeException(exc));
+                    failEngine(MERGE_FAILED, new MergePolicy.MergeException(exc));
                 }
             });
         }
